@@ -150,3 +150,25 @@ def startup():
 
     threading.Thread(target=loop, daemon=True).start()
     logging.info("Scheduler started.")
+from fastapi.responses import Response, PlainTextResponse
+from fastapi import Request
+
+@app.api_route("/twilio/voice/inbound", methods=["GET", "POST"])
+async def twilio_voice_inbound(request: Request):
+    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">HelloAgain Calls test. Your webhook is working.</Say>
+</Response>
+"""
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.api_route("/twilio/voice/status", methods=["GET", "POST"])
+async def twilio_voice_status(request: Request):
+    form = {}
+    try:
+        form = dict(await request.form())
+    except Exception:
+        pass
+    print("TWILIO STATUS:", form)
+    return PlainTextResponse("ok")
