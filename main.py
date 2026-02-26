@@ -181,6 +181,7 @@ GREETING_TEXT = (
     "I was just giving you a little call to check in and see how you’re doing today. "
     "I’ve got a bit of time for a chat if that's ok with you. "
     "How has your day been so far?"
+    "If you'd like to chat just say 'hello' "
 )
 
 @app.get("/audio/margaret-greeting.mp3")
