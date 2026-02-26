@@ -3,7 +3,8 @@ import time
 import logging
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
-
+import httpx
+from fastapi.responses import Response
 from fastapi import FastAPI
 from supabase import create_client
 
@@ -155,17 +156,9 @@ from fastapi import Request
 
 @app.api_route("/twilio/voice/inbound", methods=["GET", "POST"])
 async def twilio_voice_inbound(request: Request):
-    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice">
-    Hello, it’s Margaret from HelloAgain.
-    I was just giving you a wee call to check in and see how you’re doing today.
-    There’s no rush at all — I’ve got a bit of time for a chat.
-  </Say>
-  <Pause length="1"/>
-  <Say voice="alice">
-    How has your day been so far?
-  </Say>
+  <Play>https://helloagain-calls-production.up.railway.app/audio/margaret-greeting.mp3</Play>
 </Response>
 """
     return Response(content=twiml, media_type="application/xml")
@@ -180,3 +173,42 @@ async def twilio_voice_status(request: Request):
         pass
     print("TWILIO STATUS:", form)
     return PlainTextResponse("ok")
+# Cache the greeting in memory so we don't regenerate every call
+MARGARET_GREETING_MP3: bytes | None = None
+
+GREETING_TEXT = (
+    "Hello, it’s Margaret from HelloAgain. "
+    "I was just giving you a wee call to check in and see how you’re doing today. "
+    "There’s no rush at all — I’ve got a bit of time for a chat. "
+    "How has your day been so far?"
+)
+
+@app.get("/audio/margaret-greeting.mp3")
+async def margaret_greeting_mp3():
+    global MARGARET_GREETING_MP3
+    if MARGARET_GREETING_MP3 is not None:
+        return Response(content=MARGARET_GREETING_MP3, media_type="audio/mpeg")
+
+    api_key = os.environ["ELEVENLABS_API_KEY"]
+    voice_id = os.environ["ELEVENLABS_MARGARET_VOICE_ID"]
+    model_id = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_22050_32"
+    headers = {
+        "xi-api-key": api_key,
+        "accept": "audio/mpeg",
+        "content-type": "application/json",
+    }
+    payload = {
+        "text": GREETING_TEXT,
+        "model_id": model_id,
+        # Optional voice tuning (you can tweak later)
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        MARGARET_GREETING_MP3 = r.content
+
+    return Response(content=MARGARET_GREETING_MP3, media_type="audio/mpeg")
