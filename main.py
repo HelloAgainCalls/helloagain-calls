@@ -157,7 +157,15 @@ from fastapi import Request
 async def twilio_voice_inbound(request: Request):
     twiml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice">HelloAgain Calls test. Your webhook is working.</Say>
+  <Say voice="alice">
+    Hello, it’s Margaret from HelloAgain.
+    I was just giving you a wee call to check in and see how you’re doing today.
+    There’s no rush at all — I’ve got a bit of time for a chat.
+  </Say>
+  <Pause length="1"/>
+  <Say voice="alice">
+    How has your day been so far?
+  </Say>
 </Response>
 """
     return Response(content=twiml, media_type="application/xml")
