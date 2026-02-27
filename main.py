@@ -333,7 +333,7 @@ async def margaret_greeting_mp3():
     voice_id = os.environ["ELEVENLABS_MARGARET_VOICE_ID"]
     model_id = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
 
-   url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=ulaw_8000"
+   url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_22050_16"
     headers = {
         "xi-api-key": api_key,
         "accept": "audio/mpeg",
