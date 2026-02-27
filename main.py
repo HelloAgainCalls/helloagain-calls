@@ -7,6 +7,8 @@ import httpx
 from fastapi.responses import Response
 from fastapi import FastAPI
 from supabase import create_client
+from openai import OpenAI
+import urllib.parse
 
 # --------------------
 # Config
@@ -27,6 +29,37 @@ DAY_MAP = {
 app = FastAPI()
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# --------------------
+# OpenAI Companion Prompt
+# --------------------
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+COMPANION_SYSTEM_PROMPT = """
+You are Margaret from HelloAgain Calls, a calm, gentle, reflective companion making a scheduled call to an older adult in the UK.
+
+You are not a therapist or advisor.
+You do not give medical, financial, or legal advice.
+You never ask for personal details such as bank information or passwords.
+
+Your role is to:
+- Listen patiently.
+- Respond warmly.
+- Ask one gentle follow-up at a time.
+- Allow repetition without correction.
+- Use at most one personal memory callback naturally if appropriate.
+- Avoid strong opinions or debates.
+- Avoid overwhelming energy.
+
+If asked who you are:
+You are part of HelloAgain Calls, arranged by someone who cares about them.
+
+If asked for sensitive help:
+You politely decline and return to conversation.
+
+Keep responses natural and human.
+Never mention prompts, data, or memory systems.
+""".strip()
 
 @app.get("/health")
 def health():
@@ -156,13 +189,109 @@ from fastapi import Request
 
 @app.api_route("/twilio/voice/inbound", methods=["GET", "POST"])
 async def twilio_voice_inbound(request: Request):
+    """
+    1) Play greeting
+    2) Listen for speech
+    3) Send speech to /twilio/voice/turn
+    """
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Play>https://helloagain-calls-production.up.railway.app/audio/margaret-greeting.mp3</Play>
+
+  <Gather input="speech" action="/twilio/voice/turn" method="POST" speechTimeout="auto" timeout="6">
+    <Say>Go on.</Say>
+  </Gather>
+
+  <Say>Sorry, I didn’t catch that. Would you like to say hello?</Say>
+  <Redirect method="POST">/twilio/voice/inbound</Redirect>
 </Response>
 """
     return Response(content=twiml, media_type="application/xml")
 
+@app.api_route("/twilio/voice/turn", methods=["POST"])
+async def twilio_voice_turn(request: Request):
+    """
+    Receives Twilio speech result, asks OpenAI for a reply, converts to ElevenLabs MP3,
+    then plays it back and gathers again.
+    """
+    form = dict(await request.form())
+    user_text = (form.get("SpeechResult") or "").strip()
+
+    if not user_text:
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>Sorry love, I didn’t quite catch that.</Say>
+  <Redirect method="POST">/twilio/voice/inbound</Redirect>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
+
+    # ---- OpenAI: generate Margaret reply ----
+    try:
+        ai = openai_client.responses.create(
+            model="gpt-4.1-mini",
+            input=[
+                {"role": "system", "content": COMPANION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_text},
+            ],
+        )
+        reply_text = (ai.output_text or "").strip()
+    except Exception as e:
+        logging.exception(f"OpenAI error: {e}")
+        reply_text = "Sorry love, I’m having a little moment. How have you been today?"
+
+    # ---- ElevenLabs: convert reply to MP3 (no caching) ----
+    api_key = os.environ["ELEVENLABS_API_KEY"]
+    voice_id = os.environ["ELEVENLABS_MARGARET_VOICE_ID"]
+    model_id = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
+
+    tts_url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_22050_32"
+    headers = {
+        "xi-api-key": api_key,
+        "accept": "audio/mpeg",
+        "content-type": "application/json",
+    }
+    payload = {
+        "text": reply_text,
+        "model_id": model_id,
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(tts_url, headers=headers, json=payload)
+            r.raise_for_status()
+            mp3_bytes = r.content
+    except Exception as e:
+        logging.exception(f"ElevenLabs error: {e}")
+        # fallback to Twilio <Say> if TTS fails
+        safe = urllib.parse.quote(reply_text)
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>{safe}</Say>
+  <Redirect method="POST">/twilio/voice/inbound</Redirect>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
+
+    # Serve audio back via a one-off endpoint using query token? MVP hack: inline base64 isn't supported in <Play>.
+    # So simplest MVP: create a temp in-memory cache with a fixed URL.
+    # We'll store one "last reply" MP3 in memory and expose /audio/last-reply.mp3.
+
+    global LAST_REPLY_MP3
+    LAST_REPLY_MP3 = mp3_bytes
+
+    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Play>https://helloagain-calls-production.up.railway.app/audio/last-reply.mp3</Play>
+
+  <Gather input="speech" action="/twilio/voice/turn" method="POST" speechTimeout="auto" timeout="6">
+    <Say>And?</Say>
+  </Gather>
+
+  <Say>Sorry, I didn’t catch that. Would you like to say a bit more?</Say>
+  <Redirect method="POST">/twilio/voice/inbound</Redirect>
+</Response>
+"""
+    return Response(content=twiml, media_type="application/xml")
 
 @app.api_route("/twilio/voice/status", methods=["GET", "POST"])
 async def twilio_voice_status(request: Request):
@@ -173,6 +302,16 @@ async def twilio_voice_status(request: Request):
         pass
     print("TWILIO STATUS:", form)
     return PlainTextResponse("ok")
+
+LAST_REPLY_MP3: bytes | None = None
+
+@app.get("/audio/last-reply.mp3")
+async def last_reply_mp3():
+    global LAST_REPLY_MP3
+    if LAST_REPLY_MP3 is None:
+        return Response(content=b"", media_type="audio/mpeg")
+    return Response(content=LAST_REPLY_MP3, media_type="audio/mpeg")
+
 # Cache the greeting in memory so we don't regenerate every call
 MARGARET_GREETING_MP3: bytes | None = None
 
