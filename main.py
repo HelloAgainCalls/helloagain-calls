@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 import httpx
-from fastapi.responses import Response
+from fastapi.responses import Response, PlainTextResponse
 from fastapi import FastAPI
 from supabase import create_client
 from openai import OpenAI
@@ -184,7 +184,7 @@ def startup():
 
     threading.Thread(target=loop, daemon=True).start()
     logging.info("Scheduler started.")
-from fastapi.responses import Response, PlainTextResponse
+
 from fastapi import Request
 
 @app.api_route("/twilio/voice/inbound", methods=["GET", "POST"])
@@ -264,10 +264,10 @@ async def twilio_voice_turn(request: Request):
     except Exception as e:
         logging.exception(f"ElevenLabs error: {e}")
         # fallback to Twilio <Say> if TTS fails
-        safe = urllib.parse.quote(reply_text)
+        reply_for_say = reply_text.replace("&", "and").replace("<", "").replace(">", "")
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say>{safe}</Say>
+  <Say>{reply_for_say}</Say>
   <Redirect method="POST">/twilio/voice/inbound</Redirect>
 </Response>"""
         return Response(content=twiml, media_type="application/xml")
@@ -333,7 +333,7 @@ async def margaret_greeting_mp3():
     voice_id = os.environ["ELEVENLABS_MARGARET_VOICE_ID"]
     model_id = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
 
-   url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_22050_16"
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_22050_16"
     headers = {
         "xi-api-key": api_key,
         "accept": "audio/mpeg",
