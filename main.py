@@ -342,7 +342,6 @@ async def margaret_greeting_mp3():
     payload = {
         "text": GREETING_TEXT,
         "model_id": model_id,
-        # Optional voice tuning (you can tweak later)
         "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
     }
 
