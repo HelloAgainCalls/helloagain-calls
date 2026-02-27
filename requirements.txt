@@ -3,3 +3,4 @@ uvicorn[standard]==0.30.6
 supabase==2.6.0
 python-dateutil==2.9.0.post0
 httpx
+openai>=1.0.0
